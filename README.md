@@ -1,0 +1,71 @@
+# WebSecScan
+
+WebSecScan คือระบบประเมินความมั่นคงปลอดภัยเว็บไซต์แบบ self-assessment ผ่านเว็บเบราว์เซอร์ พัฒนาด้วย Python เพื่อช่วยรวบรวมผลตรวจทางเทคนิคและจัดทำ checklist ตามแนวทาง **ETDA ขมธอ. 4-2559** และ **มาตรฐานการรักษาความมั่นคงปลอดภัยเว็บไซต์ของ NCSA พ.ศ. 2568** ซึ่งจัดหมวดหมู่ตาม NIST Cybersecurity Framework 2.0
+
+ระบบนี้เป็นเครื่องมือช่วยประเมินเบื้องต้น ไม่ใช่ใบรับรองความปลอดภัย และไม่สามารถทดแทน penetration test หรือการทบทวนโดยผู้เชี่ยวชาญได้
+
+## ความสามารถหลัก
+
+- จัดการหลายโครงการ เว็บไซต์ และรอบการประเมิน
+- รองรับ checklist ของ ETDA และ NCSA
+- ตรวจแบบ passive เช่น HTTP security headers, cookies, TLS, charset, CSP และข้อมูลที่เซิร์ฟเวอร์เปิดเผย
+- ตรวจแบบ active เช่น reflected XSS, path traversal, CRLF/header injection และ SQL error disclosure
+- เรียก `sqlmap`, `nmap`, `nikto` และ `wapiti` หากติดตั้งไว้ในเครื่อง
+- เติมผลอัตโนมัติลง checklist พร้อมให้ผู้ประเมินแก้ไขและเพิ่มหลักฐาน
+- แสดง dashboard, compliance score และกราฟตาม NIST CSF
+- ส่งออกรายงาน PDF ภาษาไทย, CSV และ JSON
+
+## สถาปัตยกรรม
+
+| ไฟล์ | หน้าที่ |
+| --- | --- |
+| `app.py` | HTTP server, เว็บ UI, routing และงานสแกนเบื้องหลัง |
+| `probe.py` | ตัวตรวจ passive/active และตัวเรียกเครื่องมือภายนอก |
+| `engine.py` | รันการตรวจและแปลงสัญญาณเป็นผล checklist |
+| `frameworks.py` | interface กลางของมาตรฐาน |
+| `checklist.py` | ข้อกำหนด ETDA ขมธอ. 4-2559 |
+| `ncsa.py` | ข้อกำหนด NCSA พ.ศ. 2568 และ NIST CSF |
+| `schemes.py` | รูปแบบผลประเมินและการคำนวณ compliance |
+| `store.py` | จัดเก็บข้อมูลเป็น JSON ใน `data/` |
+| `charts.py` | สร้างกราฟ SVG |
+| `report.py` | ส่งออก PDF, CSV และ JSON |
+
+## การติดตั้ง
+
+ต้องใช้ Python 3.10 หรือใหม่กว่า
+
+```bash
+git clone https://github.com/Nontawatt/WebSecScan.git
+cd WebSecScan
+python -m venv .venv
+python -m pip install -r requirements.txt
+python app.py
+```
+
+บน Windows ให้เปิด virtual environment ก่อนติดตั้ง dependency:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+จากนั้นเปิด `http://127.0.0.1:8091` พอร์ตเปลี่ยนได้ด้วย `ETDA_PORT` และ host เปลี่ยนได้ด้วย `ETDA_HOST`
+
+## วิธีใช้งาน
+
+1. สร้างโครงการและระบุ URL เป้าหมาย
+2. เลือกมาตรฐานและระดับการตรวจ
+3. เริ่มสแกนและตรวจทานผลอัตโนมัติ
+4. เพิ่มหมายเหตุ หลักฐาน และแผนแก้ไข
+5. ส่งออกรายงาน PDF, CSV หรือ JSON
+
+## ข้อจำกัดและความปลอดภัย
+
+- การตรวจเป็น black-box ระดับเบื้องต้น อาจมี false positive และ false negative
+- ผลอัตโนมัติต้องได้รับการตรวจทานก่อนนำไปใช้ตัดสินความสอดคล้อง
+- โหมด active และเครื่องมือภายนอกส่งคำขอทดสอบไปยังเป้าหมายจริง
+- **ใช้กับเว็บไซต์หรือระบบที่คุณเป็นเจ้าของหรือได้รับอนุญาตให้ทดสอบอย่างชัดแจ้งเท่านั้น**
+- ไม่ควรเปิดเว็บ UI สู่เครือข่ายสาธารณะโดยไม่มี authentication และ network controls เพิ่มเติม
+
+## License
+
+ยังไม่ได้กำหนด license ผู้เขียนยังสงวนสิทธิ์ทั้งหมดตามกฎหมายลิขสิทธิ์
