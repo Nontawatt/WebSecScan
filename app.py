@@ -162,14 +162,36 @@ def view_index():
         <td class="small muted">{esc(p['created'])}</td>
         <td><a class="btn sm red" href="/delete_project?id={p['id']}" onclick="return confirm('ลบโปรเจกต์และผลตรวจทั้งหมด?')">ลบ</a></td></tr>"""
     if not rows:
-        rows = '<tr><td colspan="5" class="muted">ยังไม่มีโปรเจกต์ — สร้างใหม่ด้านล่าง</td></tr>'
+        rows = '<tr><td colspan="5" class="muted">ยังไม่มีโปรเจกต์ — เริ่มด้วย Quick Scan ด้านบน หรือสร้างโปรเจกต์ด้านล่าง</td></tr>'
+    fw_opts = "".join(f'<option value="{fw.id}">{esc(fw.short)}</option>' for fw in frameworks.all_frameworks())
     body = f"""
     <div class="card"><div class="flex" style="justify-content:space-between">
       <div><h1>โปรเจกต์ตรวจสอบเว็บไซต์</h1>
       <p class="muted" style="margin:0">ประเมินตามมาตรฐาน <b>ETDA ขมธอ.4-2559</b> (ช่องโหว่เว็บแอป) และ <b>NCSA 2568</b> (ครบวงจรตาม NIST CSF) — เก็บได้หลายเป้าหมายและหลายรอบ</p></div>
       <a class="btn" href="/dashboard">แดชบอร์ดรวม</a>
     </div></div>
-    <div class="card"><table><thead><tr><th>โปรเจกต์</th><th>ผู้ดูแล</th><th>รอบตรวจ</th><th>สร้างเมื่อ</th><th></th></tr></thead>
+
+    <div class="card" style="border:2px solid #2f6fb0">
+      <h2 style="margin-top:0">⚡ Quick Scan — สแกนได้ทันที</h2>
+      <p class="muted small" style="margin-top:0">ใส่ URL แล้วกดสแกนได้เลย ระบบจะสร้างโปรเจกต์ให้อัตโนมัติ (เหมาะกับหน้างาน) — ⚠ ตรวจเฉพาะเว็บที่ได้รับอนุญาต</p>
+      <form method="post" action="/quickscan">
+        <div class="row">
+          <div style="flex:3"><label>URL เป้าหมาย</label>
+            <input name="target" required placeholder="https://example.com/login  (ใส่ ?id=1 ถ้ามี จะทดสอบ injection ได้แม่นขึ้น)"></div>
+          <div><label>มาตรฐาน</label><select name="framework">{fw_opts}</select></div>
+          <div><label>ระดับการสแกน</label>
+            <select name="depth">
+              <option value="active">Passive + Active (เร็ว/ไม่รุกราน)</option>
+              <option value="tool">Passive + Active + เครื่องมือจริง</option>
+              <option value="passive">Passive อย่างเดียว</option>
+            </select></div>
+        </div>
+        <div style="margin-top:12px"><button class="btn green" style="font-size:1.05rem">▶ เริ่มสแกนทันที</button></div>
+      </form>
+    </div>
+
+    <div class="card"><h2 style="margin-top:0">โปรเจกต์ทั้งหมด</h2>
+      <table><thead><tr><th>โปรเจกต์</th><th>ผู้ดูแล</th><th>รอบตรวจ</th><th>สร้างเมื่อ</th><th></th></tr></thead>
       <tbody>{rows}</tbody></table></div>
     <div class="card"><h2>+ สร้างโปรเจกต์ใหม่</h2>
       <form method="post" action="/add_project">
@@ -540,6 +562,12 @@ class H(BaseHTTPRequestHandler):
                 return self._redirect(f"/project?id={p['id']}")
             if path == "/scan":
                 jid = start_scan_job(f["pid"], f["target"].strip(), f.get("depth", "tool"), f.get("framework", "etda"))
+                return self._redirect(f"/scanwait?id={jid}")
+            if path == "/quickscan":
+                target = f["target"].strip()
+                host = urllib.parse.urlparse(target if "://" in target else "http://" + target).hostname or "Quick Scan"
+                p = store.add_project(host, "", "Quick Scan")
+                jid = start_scan_job(p["id"], target, f.get("depth", "active"), f.get("framework", "etda"))
                 return self._redirect(f"/scanwait?id={jid}")
             if path == "/api/item":
                 store.update_item(f["aid"], f["id"], verdict=f.get("verdict"))
