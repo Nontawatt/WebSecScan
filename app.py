@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import charts
 import engine
 import frameworks
+import importer
 import probe
 import report
 import schemes
@@ -135,7 +136,7 @@ footer{{text-align:center;color:#8b96a5;font-size:.82rem;padding:28px}}
 <span class="logo">WebSec Checklist</span></span>
 <div class="sub">แบบตรวจสอบความมั่นคงปลอดภัยเว็บไซต์ · ETDA ขมธอ.4-2559 + NCSA 2568</div>
 <div class="spacer"></div>
-<a href="/">โปรเจกต์</a><a href="/dashboard">แดชบอร์ด</a>
+<a href="/">โปรเจกต์</a><a href="/checklist">Checklist</a><a href="/import">นำเข้า CSV</a><a href="/dashboard">แดชบอร์ด</a>
 </header>
 <div class="wrap">{body}</div>
 <footer>ETDA ขมธอ.4-2559 · NCSA/สกมช. Website Security Standard 2568 · เครื่องมือช่วยประเมินตนเอง (Self-Assessment) · localhost</footer>
@@ -152,7 +153,7 @@ def fw_badge(fw_id):
 
 
 # ---------------- Index ---------------- #
-def view_index():
+def view_index(prefill="etda"):
     projects = store.list_projects()
     rows = ""
     for p in projects:
@@ -163,7 +164,11 @@ def view_index():
         <td><a class="btn sm red" href="/delete_project?id={p['id']}" onclick="return confirm('ลบโปรเจกต์และผลตรวจทั้งหมด?')">ลบ</a></td></tr>"""
     if not rows:
         rows = '<tr><td colspan="5" class="muted">ยังไม่มีโปรเจกต์ — เริ่มด้วย Quick Scan ด้านบน หรือสร้างโปรเจกต์ด้านล่าง</td></tr>'
-    fw_opts = "".join(f'<option value="{fw.id}">{esc(fw.short)}</option>' for fw in frameworks.all_frameworks())
+    if prefill not in {f.id for f in frameworks.all_frameworks()}:
+        prefill = "etda"
+    fw_opts = "".join(
+        f'<option value="{fw.id}" {"selected" if fw.id == prefill else ""}>{esc(fw.short)}</option>'
+        for fw in frameworks.all_frameworks())
     body = f"""
     <div class="card"><div class="flex" style="justify-content:space-between">
       <div><h1>โปรเจกต์ตรวจสอบเว็บไซต์</h1>
@@ -171,7 +176,7 @@ def view_index():
       <a class="btn" href="/dashboard">แดชบอร์ดรวม</a>
     </div></div>
 
-    <div class="card" style="border:2px solid #2f6fb0">
+    <div class="card" id="quick" style="border:2px solid #2f6fb0">
       <h2 style="margin-top:0">⚡ Quick Scan — สแกนได้ทันที</h2>
       <p class="muted small" style="margin-top:0">ใส่ URL แล้วกดสแกนได้เลย ระบบจะสร้างโปรเจกต์ให้อัตโนมัติ (เหมาะกับหน้างาน) — ⚠ ตรวจเฉพาะเว็บที่ได้รับอนุญาต</p>
       <form method="post" action="/quickscan">
@@ -201,6 +206,91 @@ def view_index():
         <div style="margin-top:12px"><button class="btn">สร้างโปรเจกต์</button></div>
       </form></div>"""
     return render("โปรเจกต์", body)
+
+
+# ---------------- Checklist (ดูอย่างเดียว ไม่ต้องสแกน) ---------------- #
+def _type_label(it):
+    if it.get("ptype"):
+        return {"prevent": "การป้องกัน", "mitigate": "ลดความเสียหาย", "test": "การทดสอบ"}.get(it["ptype"], "")
+    return {"comply": "ข้อกำหนดหลัก", "mat3": "ข้อย่อย (maturity)"}.get(it.get("scheme"), "")
+
+
+def view_checklist(fw_id):
+    fw = frameworks.get(fw_id or "etda")
+    tabs = ""
+    for f in frameworks.all_frameworks():
+        cls = "" if f.id == fw.id else "ghost"
+        tabs += f'<a class="btn sm {cls}" href="/checklist?fw={f.id}" style="margin-right:6px">{esc(f.short)}</a>'
+
+    tbody = ""
+    cur_group = None
+    cur_csf = None
+    for it in fw.items:
+        if fw.uses_csf and it["csf"] != cur_csf:
+            cur_csf = it["csf"]
+            col = fw.csf_color.get(cur_csf, "#334")
+            tbody += f'<tr class="csf-head" style="background:{col}"><td colspan="3">◆ {esc(fw.csf_label.get(cur_csf, cur_csf))}</td></tr>'
+        if it["cat"] != cur_group:
+            cur_group = it["cat"]
+            info = fw.cat_info.get(cur_group, {})
+            extra = f'<div class="muted small" style="font-weight:400">ภัยคุกคาม: {esc(info.get("threat",""))}</div>' if info.get("threat") else ""
+            tbody += f'<tr class="cat-head"><td colspan="3">{esc(it["cat_name"])}{extra}</td></tr>'
+        apply_tag = f'<span class="applytag">{esc(it["applies_to"])}</span>' if it.get("applies_to") else ""
+        ref = esc(it["ref"]) + ((" · " + esc(it["otg"])) if it.get("otg") else "")
+        lvl = "sub" if it.get("level") == "sub" else ""
+        tbody += f"""<tr class="{lvl}">
+          <td class="small"><b>{esc(it['id'])}</b></td>
+          <td>{esc(it['text'])}{apply_tag}<div class="muted small" style="margin-top:3px">อ้างอิง {ref}</div></td>
+          <td class="small muted">{esc(_type_label(it))}</td></tr>"""
+
+    body = f"""
+    <div class="card">
+      <div class="flex" style="justify-content:space-between">
+        <div><h1 style="margin:.1em 0">Checklist มาตรฐาน (ดูอย่างเดียว)</h1>
+          <div class="muted small">รายการข้อกำหนดทั้งหมด — ไม่ต้องสแกน ใช้เป็นแนวอ้างอิง/เตรียมประเมิน</div></div>
+        <div>{tabs}</div>
+      </div>
+      <p class="muted" style="margin-bottom:8px">{esc(fw.name)}<br>{esc(fw.std)} · รวม <b>{len(fw.items)}</b> ข้อ
+        <a class="btn sm green" href="/?prefill={fw.id}#quick" style="margin-left:8px">เริ่มสแกนด้วยมาตรฐานนี้</a></p>
+      <table><thead><tr><th style="width:80px">ข้อ</th><th>ข้อกำหนด / ข้อเสนอแนะ</th><th style="width:130px">ประเภท</th></tr></thead>
+      <tbody>{tbody}</tbody></table>
+    </div>"""
+    return render("Checklist", body)
+
+
+# ---------------- Import CSV ---------------- #
+def view_import():
+    fw_sel = "".join(f'<option value="{fw.id}">{esc(fw.short)}</option>' for fw in frameworks.all_frameworks())
+    dl = "".join(
+        f'<a class="btn sm ghost" href="/template.csv?fw={fw.id}" style="margin-right:6px">⬇ เทมเพลต {esc(fw.short)}</a>'
+        for fw in frameworks.all_frameworks())
+    body = f"""
+    <div class="card">
+      <h1 style="margin:.1em 0">นำเข้า CSV → ออกผล Checklist</h1>
+      <p class="muted">อัปโหลดไฟล์ CSV (รูปแบบเดียวกับที่ระบบ export) เพื่อสร้างผลการตรวจ + รายงาน โดยไม่ต้องสแกน —
+      เหมาะกับกรณีกรอกผลใน Excel/แจกให้ผู้ตรวจกรอกแล้วนำกลับเข้ามา</p>
+
+      <div style="background:#f6f9fc;border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:14px">
+        <b>ยังไม่มีไฟล์?</b> ดาวน์โหลดเทมเพลตเปล่าไปกรอกก่อน (มีค่าที่กรอกได้กำกับทุกข้อ):<br>
+        <div style="margin-top:8px">{dl}</div>
+      </div>
+
+      <form method="post" action="/import" enctype="multipart/form-data">
+        <div class="row">
+          <div><label>ไฟล์ CSV</label><input type="file" name="file" accept=".csv" required></div>
+          <div><label>มาตรฐาน</label><select name="framework"><option value="auto">ตรวจอัตโนมัติจากไฟล์</option>{fw_sel}</select></div>
+        </div>
+        <div class="row">
+          <div><label>ชื่อเว็บไซต์/เป้าหมาย (แสดงในรายงาน)</label><input name="site" placeholder="เช่น example.go.th"></div>
+          <div><label>ตรวจโดย</label><input name="auditor" placeholder="ชื่อผู้ตรวจ/หน่วยงาน"></div>
+        </div>
+        <div style="margin-top:12px"><button class="btn green">อัปโหลด + สร้างผล</button></div>
+      </form>
+      <p class="muted small" style="margin-top:10px">คอลัมน์ที่ใช้จับคู่: <b>ข้อที่</b> (เช่น 4.1-P1 / N8.4.2) และ <b>ผลการประเมิน</b>
+      (เช่น ยอมรับได้ / ยังต้องปรับปรุง / ทดสอบผ่าน / ดำเนินการแล้ว / อยู่ระหว่างดำเนินการ) — เว้นว่างได้ = ประเมินโดยผู้ตรวจ ·
+      รองรับส่วนแผนแก้ไข (ก.2/ค.2) ในไฟล์เดียวกันด้วย</p>
+    </div>"""
+    return render("นำเข้า CSV", body)
 
 
 # ---------------- Dashboard ---------------- #
@@ -526,7 +616,16 @@ class H(BaseHTTPRequestHandler):
         path = u.path
         try:
             if path == "/":
-                return self._send(view_index())
+                return self._send(view_index(q.get("prefill", ["etda"])[0]))
+            if path == "/checklist":
+                return self._send(view_checklist(q.get("fw", ["etda"])[0]))
+            if path == "/import":
+                return self._send(view_import())
+            if path == "/template.csv":
+                fwid = q.get("fw", ["etda"])[0]
+                base = frameworks.get(fwid).id
+                return self._send(importer.blank_template_csv(fwid), "text/csv; charset=utf-8",
+                                  headers={"Content-Disposition": f'attachment; filename="{base}_template.csv"'})
             if path == "/dashboard":
                 return self._send(view_dashboard())
             if path == "/project":
@@ -553,9 +652,37 @@ class H(BaseHTTPRequestHandler):
         except Exception:
             return self._send(render("error", f'<div class="card"><h2>ผิดพลาด</h2><pre>{esc(traceback.format_exc())}</pre></div>'), code=500)
 
+    def _handle_import(self):
+        ln = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(ln) if ln else b""
+        fields, files = importer.parse_multipart(raw, self.headers.get("Content-Type", ""))
+        if "file" not in files or not files["file"][1]:
+            return self._send(render("นำเข้า CSV", '<div class="card"><h2>ไม่พบไฟล์</h2><p class="muted">กรุณาเลือกไฟล์ CSV</p><a class="btn" href="/import">ย้อนกลับ</a></div>'), code=400)
+        fname, data = files["file"]
+        text = data.decode("utf-8-sig", "replace")
+        sel = fields.get("framework", "auto")
+        if importer.is_nessus(text):
+            # ไฟล์ Nessus: auto ยังไม่รู้มาตรฐาน → ใช้ ETDA เป็นค่าเริ่มต้น
+            fw_id, items_state, remediation, matched, toollog = importer.parse_nessus(
+                text, None if sel == "auto" else sel)
+        else:
+            fw_id, items_state, remediation, matched = importer.parse_csv(text, None if sel == "auto" else sel)
+            toollog = [f"นำเข้าผลจาก CSV: {fname} — จับคู่ได้ {matched} ข้อ (มาตรฐาน {fw_id})"]
+        site = (fields.get("site") or "").strip() or fname
+        p = store.add_project(site, fields.get("auditor", ""), "นำเข้าจาก CSV")
+        rec = store.add_assessment(p["id"], f"(นำเข้าจากไฟล์: {fname})", "import", {}, items_state,
+                                   toollog, {}, framework=fw_id)
+        rec["remediation"] = remediation
+        rec["site_label"] = site
+        rec["audited_by"] = fields.get("auditor", "")
+        store.save_assessment(rec)
+        return self._redirect(f"/assess?id={rec['id']}")
+
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
         try:
+            if path == "/import":
+                return self._handle_import()
             f = self._form()
             if path == "/add_project":
                 p = store.add_project(f.get("name", ""), f.get("owner", ""), f.get("note", ""))

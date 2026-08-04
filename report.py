@@ -185,7 +185,7 @@ def to_pdf(rec):
             r, g, b = _hex(fw.csf_color.get(cur_csf, "#334155"))
             pdf.set_font("TH", "B", 9.5); pdf.set_fill_color(r, g, b); pdf.set_text_color(255, 255, 255)
             pdf.set_x(pdf.l_margin)
-            pdf.cell(sum(W.values()), 6.5, "  ◆ " + fw.csf_label.get(cur_csf, cur_csf), border=1, fill=True, ln=1)
+            pdf.cell(sum(W.values()), 6.5, "  " + fw.csf_label.get(cur_csf, cur_csf), border=1, fill=True, ln=1)
             pdf.set_text_color(0, 0, 0)
         if it["cat"] != cur_group:
             cur_group = it["cat"]
