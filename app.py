@@ -135,7 +135,7 @@ footer{{text-align:center;color:#8b96a5;font-size:.82rem;padding:28px}}
 <span class="logo">WebSec Checklist</span></span>
 <div class="sub">แบบตรวจสอบความมั่นคงปลอดภัยเว็บไซต์ · ETDA ขมธอ.4-2559 + NCSA 2568</div>
 <div class="spacer"></div>
-<a href="/">โปรเจกต์</a><a href="/dashboard">แดชบอร์ด</a>
+<a href="/">โปรเจกต์</a><a href="/checklist">Checklist</a><a href="/dashboard">แดชบอร์ด</a>
 </header>
 <div class="wrap">{body}</div>
 <footer>ETDA ขมธอ.4-2559 · NCSA/สกมช. Website Security Standard 2568 · เครื่องมือช่วยประเมินตนเอง (Self-Assessment) · localhost</footer>
@@ -152,7 +152,7 @@ def fw_badge(fw_id):
 
 
 # ---------------- Index ---------------- #
-def view_index():
+def view_index(prefill="etda"):
     projects = store.list_projects()
     rows = ""
     for p in projects:
@@ -163,7 +163,11 @@ def view_index():
         <td><a class="btn sm red" href="/delete_project?id={p['id']}" onclick="return confirm('ลบโปรเจกต์และผลตรวจทั้งหมด?')">ลบ</a></td></tr>"""
     if not rows:
         rows = '<tr><td colspan="5" class="muted">ยังไม่มีโปรเจกต์ — เริ่มด้วย Quick Scan ด้านบน หรือสร้างโปรเจกต์ด้านล่าง</td></tr>'
-    fw_opts = "".join(f'<option value="{fw.id}">{esc(fw.short)}</option>' for fw in frameworks.all_frameworks())
+    if prefill not in {f.id for f in frameworks.all_frameworks()}:
+        prefill = "etda"
+    fw_opts = "".join(
+        f'<option value="{fw.id}" {"selected" if fw.id == prefill else ""}>{esc(fw.short)}</option>'
+        for fw in frameworks.all_frameworks())
     body = f"""
     <div class="card"><div class="flex" style="justify-content:space-between">
       <div><h1>โปรเจกต์ตรวจสอบเว็บไซต์</h1>
@@ -171,7 +175,7 @@ def view_index():
       <a class="btn" href="/dashboard">แดชบอร์ดรวม</a>
     </div></div>
 
-    <div class="card" style="border:2px solid #2f6fb0">
+    <div class="card" id="quick" style="border:2px solid #2f6fb0">
       <h2 style="margin-top:0">⚡ Quick Scan — สแกนได้ทันที</h2>
       <p class="muted small" style="margin-top:0">ใส่ URL แล้วกดสแกนได้เลย ระบบจะสร้างโปรเจกต์ให้อัตโนมัติ (เหมาะกับหน้างาน) — ⚠ ตรวจเฉพาะเว็บที่ได้รับอนุญาต</p>
       <form method="post" action="/quickscan">
@@ -201,6 +205,56 @@ def view_index():
         <div style="margin-top:12px"><button class="btn">สร้างโปรเจกต์</button></div>
       </form></div>"""
     return render("โปรเจกต์", body)
+
+
+# ---------------- Checklist (ดูอย่างเดียว ไม่ต้องสแกน) ---------------- #
+def _type_label(it):
+    if it.get("ptype"):
+        return {"prevent": "การป้องกัน", "mitigate": "ลดความเสียหาย", "test": "การทดสอบ"}.get(it["ptype"], "")
+    return {"comply": "ข้อกำหนดหลัก", "mat3": "ข้อย่อย (maturity)"}.get(it.get("scheme"), "")
+
+
+def view_checklist(fw_id):
+    fw = frameworks.get(fw_id or "etda")
+    tabs = ""
+    for f in frameworks.all_frameworks():
+        cls = "" if f.id == fw.id else "ghost"
+        tabs += f'<a class="btn sm {cls}" href="/checklist?fw={f.id}" style="margin-right:6px">{esc(f.short)}</a>'
+
+    tbody = ""
+    cur_group = None
+    cur_csf = None
+    for it in fw.items:
+        if fw.uses_csf and it["csf"] != cur_csf:
+            cur_csf = it["csf"]
+            col = fw.csf_color.get(cur_csf, "#334")
+            tbody += f'<tr class="csf-head" style="background:{col}"><td colspan="3">◆ {esc(fw.csf_label.get(cur_csf, cur_csf))}</td></tr>'
+        if it["cat"] != cur_group:
+            cur_group = it["cat"]
+            info = fw.cat_info.get(cur_group, {})
+            extra = f'<div class="muted small" style="font-weight:400">ภัยคุกคาม: {esc(info.get("threat",""))}</div>' if info.get("threat") else ""
+            tbody += f'<tr class="cat-head"><td colspan="3">{esc(it["cat_name"])}{extra}</td></tr>'
+        apply_tag = f'<span class="applytag">{esc(it["applies_to"])}</span>' if it.get("applies_to") else ""
+        ref = esc(it["ref"]) + ((" · " + esc(it["otg"])) if it.get("otg") else "")
+        lvl = "sub" if it.get("level") == "sub" else ""
+        tbody += f"""<tr class="{lvl}">
+          <td class="small"><b>{esc(it['id'])}</b></td>
+          <td>{esc(it['text'])}{apply_tag}<div class="muted small" style="margin-top:3px">อ้างอิง {ref}</div></td>
+          <td class="small muted">{esc(_type_label(it))}</td></tr>"""
+
+    body = f"""
+    <div class="card">
+      <div class="flex" style="justify-content:space-between">
+        <div><h1 style="margin:.1em 0">Checklist มาตรฐาน (ดูอย่างเดียว)</h1>
+          <div class="muted small">รายการข้อกำหนดทั้งหมด — ไม่ต้องสแกน ใช้เป็นแนวอ้างอิง/เตรียมประเมิน</div></div>
+        <div>{tabs}</div>
+      </div>
+      <p class="muted" style="margin-bottom:8px">{esc(fw.name)}<br>{esc(fw.std)} · รวม <b>{len(fw.items)}</b> ข้อ
+        <a class="btn sm green" href="/?prefill={fw.id}#quick" style="margin-left:8px">เริ่มสแกนด้วยมาตรฐานนี้</a></p>
+      <table><thead><tr><th style="width:80px">ข้อ</th><th>ข้อกำหนด / ข้อเสนอแนะ</th><th style="width:130px">ประเภท</th></tr></thead>
+      <tbody>{tbody}</tbody></table>
+    </div>"""
+    return render("Checklist", body)
 
 
 # ---------------- Dashboard ---------------- #
@@ -526,7 +580,9 @@ class H(BaseHTTPRequestHandler):
         path = u.path
         try:
             if path == "/":
-                return self._send(view_index())
+                return self._send(view_index(q.get("prefill", ["etda"])[0]))
+            if path == "/checklist":
+                return self._send(view_checklist(q.get("fw", ["etda"])[0]))
             if path == "/dashboard":
                 return self._send(view_dashboard())
             if path == "/project":
