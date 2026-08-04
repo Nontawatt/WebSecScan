@@ -2,9 +2,18 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
-data/
-*.log
 .env
 .env.*
 .DS_Store
 Thumbs.db
+
+# ---- ผลการสแกน / ข้อมูลลูกค้า: ห้าม commit ขึ้น repo ----
+data/
+*.log
+*.pdf
+*.csv
+*.nessus
+*.json
+!requirements*.txt
+_ttest_*.py
+_gen_*.py
