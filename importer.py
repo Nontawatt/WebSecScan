@@ -117,6 +117,126 @@ def parse_csv(text, fw_id=None):
     return fw_id, items_state, remediation, matched
 
 
+# ---------- Nessus vulnerability scan (.csv) → checklist ----------
+def is_nessus(text):
+    first = (text.splitlines() or [""])[0].lower()
+    return "plugin id" in first and "risk" in first and "host" in first and "name" in first
+
+
+def _neg_verdict(scheme):
+    return {"test": "fail", "ctrl": "fix", "comply": "fix", "mat3": "notdone"}.get(scheme, "fix")
+
+
+# keyword (lowercase substrings) -> รหัสข้อที่เกี่ยว (จะถูกตั้งเป็นผล "ไม่ผ่าน/ต้องปรับปรุง")
+_ETDA_RULES = [
+    (["sql injection"], ["4.1-T1", "4.1-P1"]),
+    (["command injection", "os command", "code injection"], ["4.2-T1", "4.2-P1"]),
+    (["directory traversal", "path traversal", "file inclusion", "lfi", "rfi",
+      "directory listing", "browsable", "arbitrary file"], ["4.3-T1", "4.3-P1"]),
+    (["session fixation", "session id", "cookie without httponly", "httponly",
+      "secure cookie", "cookie secure"], ["4.4-T1", "4.5-M1"]),
+    (["cross-site scripting", "cross site scripting", " xss", "(xss"], ["4.5-T1", "4.5-P1"]),
+    (["cross-site request forgery", "csrf"], ["4.6-T1", "4.6-P3"]),
+    (["response splitting", "crlf", "header injection", "clickjack", "x-frame-options",
+      "hsts", "strict-transport", "missing http", "security header"], ["4.7-T1", "4.7-P1"]),
+    (["smtp", "open relay", "mail injection"], ["4.8-T1"]),
+    (["default cred", "default password", "default account", "weak password",
+      "brute force", "login page", "authentication bypass"], ["4.9-T1", "4.9-P1"]),
+    (["server version", "banner", "x-powered-by", "version disclos", "software version",
+      "information disclosure"], ["4.7-P1"]),
+]
+_NCSA_RULES = [
+    (["ssl", "tls", "cipher", "certificate", "sslv", "tlsv", "poodle", "beast", "weak encryption"], ["N8.7.4"]),
+    (["clickjack", "x-frame-options", "hsts", "strict-transport", "security header",
+      "missing http", "banner", "version disclos", "directory listing", "information disclosure"], ["N8.4.2"]),
+    (["apache", "nginx", "iis", "php", "web server", "outdated", "end of life", "unsupported"], ["N8.6.1"]),
+    (["sql injection", "cross-site scripting", " xss", "csrf", "traversal", "command injection",
+      "file inclusion"], ["N8.1", "N8.2"]),
+    (["default cred", "weak password", "login", "authentication", "brute force"], ["N8.5"]),
+    (["rdp", "remote desktop"], ["N8.4.3", "N8.8"]),
+    (["smb", "netbios", "msrpc"], ["N8.8", "N8.4.1"]),
+]
+
+# พอร์ตที่เปิดแล้วควรระวัง (แมปแม้ Risk=None เพราะเป็นข้อสังเกตด้าน hardening)
+_RISKY_PORTS = {
+    "3389": ("RDP (Remote Desktop)", ["N8.4.3", "N8.8"], "จำกัดการเข้าถึง RDP (ผ่าน VPN/allowlist IP) + บังคับ MFA หรือปิดถ้าไม่ใช้"),
+    "139": ("NetBIOS/SMB", ["N8.8", "N8.4.1"], "ปิด/จำกัด SMB & NetBIOS ให้เฉพาะวงที่จำเป็น"),
+    "135": ("MSRPC", ["N8.8"], "จำกัด MSRPC (135) ด้วยไฟร์วอลล์"),
+    "445": ("SMB", ["N8.8", "N8.4.1"], "ปิด/จำกัด SMB (445)"),
+    "5060": ("SIP", ["N8.8"], "จำกัดการเข้าถึง SIP (5060) เฉพาะที่จำเป็น"),
+    "23": ("Telnet", ["N8.8", "N8.7.4"], "ปิด Telnet (ไม่เข้ารหัส) และใช้ SSH แทน"),
+    "21": ("FTP", ["N8.8", "N8.7.4"], "หลีกเลี่ยง FTP แบบไม่เข้ารหัส ใช้ FTPS/SFTP"),
+}
+
+
+def parse_nessus(text, fw_id=None):
+    """
+    แมปผล Nessus CSV เข้ากับ checklist (ETDA หรือ NCSA)
+    คืน (fw_id, items_state, remediation, matched_count, toollog)
+    """
+    fw_id = fw_id or "etda"
+    fw = frameworks.get(fw_id)
+    rows = list(csv.DictReader(io.StringIO(text)))
+    rules = _NCSA_RULES if fw_id == "ncsa" else _ETDA_RULES
+
+    matched = {}       # item_id -> verdict
+    remediation = []
+    toollog = [f"นำเข้าผล Nessus: {len(rows)} รายการ (มาตรฐาน {fw_id})"]
+    n_vuln = 0
+    n_obs = 0
+
+    for r in rows:
+        name = (r.get("Name") or "").strip()
+        risk = (r.get("Risk") or "None").strip()
+        host = (r.get("Host") or "").strip()
+        port = str(r.get("Port") or "").strip()
+        blob = " ".join((r.get(k) or "") for k in ("Name", "Synopsis", "Description", "Solution")).lower()
+        is_vuln = risk not in ("None", "")
+
+        hit = set()
+        for kws, items in rules:
+            if any(k in blob for k in kws):
+                hit.update(items)
+        risky = _RISKY_PORTS.get(port)
+        if risky and fw_id == "ncsa":
+            hit.update(risky[1])
+
+        if is_vuln or risky:
+            for iid in hit:
+                it = fw.item_by_id.get(iid)
+                if it:
+                    matched[iid] = _neg_verdict(it["scheme"])
+
+        if is_vuln:
+            n_vuln += 1
+            remediation.append({
+                "date": "", "desc": f"[{risk}] {name} ({host}:{port})",
+                "cause": (r.get("Synopsis") or "").strip(),
+                "temp": (f"CVE: {r.get('CVE')}" if r.get("CVE") else ""),
+                "fix": (r.get("Solution") or r.get("See Also") or "").strip(),
+                "owner": "", "due": ""})
+            toollog.append(f"[{risk}] {name} @ {host}:{port}")
+        elif risky:
+            n_obs += 1
+            svc, _pit, note = risky
+            remediation.append({
+                "date": "", "desc": f"[ข้อสังเกต] พอร์ตเปิด {port}/{svc} ({host})",
+                "cause": "พบจากการสแกนพอร์ต (Nessus, Risk=None) — ยังไม่ยืนยันเป็นช่องโหว่ แต่ควรทบทวนตามหลัก hardening",
+                "temp": "", "fix": note, "owner": "", "due": ""})
+            toollog.append(f"[open-port] {host}:{port} {svc}")
+
+    items_state = {}
+    for it in fw.items:
+        v = matched.get(it["id"], "unset")
+        items_state[it["id"]] = {"verdict": v, "auto": it["id"] in matched,
+                                 "note": ("แมปจากผลสแกน Nessus" if it["id"] in matched else ""),
+                                 "evidence": "", "userNote": ""}
+    toollog.append(f"สรุป: ช่องโหว่ {n_vuln} รายการ · ข้อสังเกตพอร์ตเปิด {n_obs} · แมปเข้า checklist {len(matched)} ข้อ")
+    if n_vuln == 0:
+        toollog.append("หมายเหตุ: ไม่พบช่องโหว่ (Risk>=Low) ในไฟล์นี้ — ข้อ checklist ส่วนใหญ่จึงเป็น 'ประเมินโดยผู้ตรวจ'")
+    return fw_id, items_state, remediation, len(matched), toollog
+
+
 def blank_template_csv(fw_id):
     """เทมเพลต CSV เปล่าให้กรอกในช่อง 'ผลการประเมิน' (มีค่าที่กรอกได้กำกับต่อข้อ)"""
     fw = frameworks.get(fw_id)

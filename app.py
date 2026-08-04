@@ -661,12 +661,17 @@ class H(BaseHTTPRequestHandler):
         fname, data = files["file"]
         text = data.decode("utf-8-sig", "replace")
         sel = fields.get("framework", "auto")
-        fw_id, items_state, remediation, matched = importer.parse_csv(text, None if sel == "auto" else sel)
+        if importer.is_nessus(text):
+            # ไฟล์ Nessus: auto ยังไม่รู้มาตรฐาน → ใช้ ETDA เป็นค่าเริ่มต้น
+            fw_id, items_state, remediation, matched, toollog = importer.parse_nessus(
+                text, None if sel == "auto" else sel)
+        else:
+            fw_id, items_state, remediation, matched = importer.parse_csv(text, None if sel == "auto" else sel)
+            toollog = [f"นำเข้าผลจาก CSV: {fname} — จับคู่ได้ {matched} ข้อ (มาตรฐาน {fw_id})"]
         site = (fields.get("site") or "").strip() or fname
         p = store.add_project(site, fields.get("auditor", ""), "นำเข้าจาก CSV")
         rec = store.add_assessment(p["id"], f"(นำเข้าจากไฟล์: {fname})", "import", {}, items_state,
-                                   [f"นำเข้าผลจาก CSV: {fname} — จับคู่ได้ {matched} ข้อ (มาตรฐาน {fw_id})"],
-                                   {}, framework=fw_id)
+                                   toollog, {}, framework=fw_id)
         rec["remediation"] = remediation
         rec["site_label"] = site
         rec["audited_by"] = fields.get("auditor", "")
